@@ -42,6 +42,16 @@ export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props)
   const objectStartAngleRef = useRef<number | null>(null);
   const originalVertsRef = useRef<Vec2[] | null>(null);
 
+  function computePolygonAreaM2(pts: Vec2[]): number {
+    if (pts.length < 3) return 0;
+    let sum = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return Math.abs(sum) * 0.5;
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
@@ -139,6 +149,27 @@ export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props)
       ctx.setLineDash([]);
       ctx.restore();
     }
+
+    // draw area label (bottom-left)
+    const areaM2 = computePolygonAreaM2(vertices);
+    const areaText = `${areaM2.toFixed(2)} m²`;
+    const padX = 8, padY = 6;
+    ctx.font = '13px system-ui, -apple-system, Segoe UI, Roboto';
+    const metrics = ctx.measureText(areaText);
+    const boxW = metrics.width + padX * 2;
+    const boxH = 18 + padY * 2;
+    const bx = 10, by = rect.height - boxH - 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(bx, by, boxW, boxH);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(areaText, bx + padX, by + boxH / 2 + 1);
   }, [vertices, offset, selectedEdge, selectedVertex, hoverEdge, hoverVertex, isAddMode, addPreview, isObjectMode, objectSelected, pxPerM, containerSize.w, containerSize.h]);
 
   // Track container size changes (e.g., when splitter moves) and trigger redraw

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { FiCamera } from 'react-icons/fi';
 import { type Vec2 } from '../types';
 
 type Props = { vertices: Vec2[] };
@@ -15,13 +16,17 @@ export default function Floor3D({ vertices }: Props) {
   const materialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const raycasterRef = useRef<THREE.Raycaster | null>(null);
   const pointerRef = useRef<THREE.Vector2 | null>(null);
-  const outlineRef = useRef<THREE.LineSegments | null>(null);
+  const outlineRef = useRef<THREE.Mesh | null>(null);
   // no transform controls (move/rotate) per latest requirement
 
   const [selected, setSelected] = useState<boolean>(false);
   const [textureUrl, setTextureUrl] = useState<string>("");
-  const [repeatX, setRepeatX] = useState<number>(2);
-  const [repeatY, setRepeatY] = useState<number>(2);
+  // --- Preset textures for quick selection ---
+  const texturePresets = [
+    { name: 'Oak', url: '/texture/oak.jpg' },
+    { name: 'Hardwood', url: '/texture/hardwood.png' },
+    { name: 'Finewood', url: '/texture/finewood.jpg' },
+  ];
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -67,12 +72,16 @@ export default function Floor3D({ vertices }: Props) {
     // removed transform controls (move/rotate)
 
     const onResize = () => {
-      const w = mount.clientWidth, h = mount.clientHeight;
+      const w = mount.clientWidth || 1, h = mount.clientHeight || 1;
       renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
     window.addEventListener('resize', onResize);
+
+    // Respond to container size changes (e.g., splitter drag) via ResizeObserver
+    const ro = new ResizeObserver(() => onResize());
+    ro.observe(mount);
 
     let raf = 0;
     const loop = () => {
@@ -85,6 +94,7 @@ export default function Floor3D({ vertices }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
+      ro.disconnect();
       controls.dispose();
       renderer.dispose();
       mount.removeChild(renderer.domElement);
@@ -156,25 +166,30 @@ export default function Floor3D({ vertices }: Props) {
       const scene = sceneRef.current!;
       // manage outline only (no transform controls)
       if (hit && mesh) {
-        // outline
+        // remove previous glow
         if (outlineRef.current) {
           scene.remove(outlineRef.current);
-          outlineRef.current.geometry.dispose();
-          (outlineRef.current.material as THREE.LineBasicMaterial).dispose();
+          const obj = outlineRef.current;
+          (obj.material as THREE.Material).dispose();
+          obj.geometry.dispose();
           outlineRef.current = null;
         }
-        const edges = new THREE.EdgesGeometry(mesh.geometry);
-        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00c2ff, linewidth: 2 }));
-        line.position.copy(mesh.position);
-        line.rotation.copy(mesh.rotation);
-        line.scale.copy(mesh.scale);
-        scene.add(line);
-        outlineRef.current = line;
+        // add yellow glow using slightly scaled backside mesh
+        const glowGeom = (mesh.geometry as THREE.BufferGeometry).clone();
+        const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd54f, transparent: true, opacity: 0.35, side: THREE.BackSide });
+        const glow = new THREE.Mesh(glowGeom, glowMat);
+        glow.position.copy(mesh.position);
+        glow.rotation.copy(mesh.rotation);
+        glow.scale.copy(mesh.scale).multiplyScalar(1.02);
+        glow.renderOrder = 1;
+        scene.add(glow);
+        outlineRef.current = glow;
       } else {
         if (outlineRef.current) {
           scene.remove(outlineRef.current);
-          outlineRef.current.geometry.dispose();
-          (outlineRef.current.material as THREE.LineBasicMaterial).dispose();
+          const obj = outlineRef.current;
+          (obj.material as THREE.Material).dispose();
+          obj.geometry.dispose();
           outlineRef.current = null;
         }
       }
@@ -192,22 +207,25 @@ export default function Floor3D({ vertices }: Props) {
       const hit = intersects.length > 0;
       const scene = sceneRef.current!;
       if (hit) {
-        // show outline if not already shown
+        // show glow if not already shown
         if (!outlineRef.current) {
-          const edges = new THREE.EdgesGeometry(mesh.geometry);
-          const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00c2ff, linewidth: 2 }));
-          line.position.copy(mesh.position);
-          line.rotation.copy(mesh.rotation);
-          line.scale.copy(mesh.scale);
-          scene.add(line);
-          outlineRef.current = line;
+          const glowGeom = (mesh.geometry as THREE.BufferGeometry).clone();
+          const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd54f, transparent: true, opacity: 0.35, side: THREE.BackSide });
+          const glow = new THREE.Mesh(glowGeom, glowMat);
+          glow.position.copy(mesh.position);
+          glow.rotation.copy(mesh.rotation);
+          glow.scale.copy(mesh.scale).multiplyScalar(1.02);
+          glow.renderOrder = 1;
+          scene.add(glow);
+          outlineRef.current = glow;
         }
       } else if (!selected) {
-        // only hide outline if not selected
+        // only hide glow if not selected
         if (outlineRef.current) {
           scene.remove(outlineRef.current);
-          outlineRef.current.geometry.dispose();
-          (outlineRef.current.material as THREE.LineBasicMaterial).dispose();
+          const obj = outlineRef.current;
+          (obj.material as THREE.Material).dispose();
+          obj.geometry.dispose();
           outlineRef.current = null;
         }
       }
@@ -240,7 +258,7 @@ export default function Floor3D({ vertices }: Props) {
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         tex.anisotropy = Math.min(8, rendererRef.current?.capabilities.getMaxAnisotropy?.() || 1);
-        tex.repeat.set(repeatX, repeatY);
+        tex.repeat.set(2, 2);
         material.map = tex;
         material.color.set(0xffffff);
         material.transparent = false;
@@ -251,48 +269,157 @@ export default function Floor3D({ vertices }: Props) {
       () => {
       }
     );
-  }, [textureUrl, repeatX, repeatY]);
+  }, [textureUrl]);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span>3D Floor — ShapeGeometry từ polygon 2D</span>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => {
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid #e6e8eb', display: 'flex', alignItems: 'center', gap: 8, background: '#333333' }}>
+        <div />
+        <button title="Screenshot" style={{ width: 40, height: 40, border: '1px solid #dcdfe3', borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} onClick={() => {
           const r = rendererRef.current; if (!r) return;
           r.render(sceneRef.current!, cameraRef.current!);
           const url = r.domElement.toDataURL('image/png');
           const a = document.createElement('a');
           a.href = url; a.download = 'screenshot-3d.png'; a.click();
-        }}>Screenshot</button>
+        }}><FiCamera style={{ fontSize: 16 }} /></button>
       </div>
       <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
         {selected && (
-          <div style={{ position: 'absolute', right: 12, top: 12, padding: '10px 12px', background: 'rgba(255,255,255,0.95)', border: '1px solid #ddd', borderRadius: 6, width: 260, boxShadow: '0 2px 6px rgba(0,0,0,0.08)' }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>Floor Properties</div>
-            <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>Click outside the floor to hide</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <button onClick={() => setTextureUrl('/texture/oak.jpg')}>Wood 1</button>
-              <button onClick={() => setTextureUrl('/texture/hardwood.png')}>Wood 2</button>
-              <button onClick={() => setTextureUrl('/texture/finewood.jpg')}>Wood 3</button>
+          <div
+            style={{
+              position: 'absolute',
+              right: 12,
+              top: 12,
+              width: 260,
+              background: 'rgba(255,255,255,0.98)',
+              border: '1px solid #ddd',
+              borderRadius: 8,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              fontSize: 14,
+              backdropFilter: 'blur(5px)',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Header */}
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid #eee' }}>
+              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Floor Properties</div>
+              <div style={{ fontSize: 12, color: '#666' }}>Click outside the floor to hide</div>
             </div>
-            <div style={{ marginTop: 10 }}>
-              <label style={{ display: 'block', fontSize: 12, color: '#444' }}>Texture URL</label>
-              <input value={textureUrl} onChange={(e) => setTextureUrl(e.target.value)} placeholder="/path/to/texture.jpg" style={{ width: '100%' }} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: 12, color: '#444' }}>Repeat X</label>
-                <input type="number" min={0.1} step={0.1} value={repeatX} onChange={(e) => setRepeatX(parseFloat(e.target.value) || 0)} style={{ width: '100%' }} />
+
+            {/* Content */}
+            <div style={{ padding: '16px' }}>
+              {/* Presets */}
+              <div style={{ marginBottom: 16 }}>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: '#444',
+                    marginBottom: 4,
+                  }}
+                >
+                  Presets
+                </label>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: 8,
+                  }}
+                >
+                  {texturePresets.map((tex) => (
+                    <button
+                      key={tex.url}
+                      title={tex.name}
+                      onClick={() => setTextureUrl(tex.url)}
+                      style={{
+                        width: '100%',
+                        height: 60,
+                        border: '2px solid #ddd',
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                        backgroundColor: '#f0f0f0',
+                        backgroundImage: `url(${tex.url})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
-              <div>
-                <label style={{ display: 'block', fontSize: 12, color: '#444' }}>Repeat Y</label>
-                <input type="number" min={0.1} step={0.1} value={repeatY} onChange={(e) => setRepeatY(parseFloat(e.target.value) || 0)} style={{ width: '100%' }} />
+
+              {/* URL */}
+              <div style={{ marginBottom: 16 }}>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: '#444',
+                    marginBottom: 4,
+                  }}
+                >
+                  Texture URL
+                </label>
+                <input
+                  value={textureUrl}
+                  onChange={(e) => setTextureUrl(e.target.value)}
+                  placeholder="/path/to/texture.jpg"
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    border: '1px solid #ccc',
+                    borderRadius: 4,
+                    fontSize: 13,
+                    boxSizing: 'border-box',
+                  }}
+                />
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button onClick={() => { setTextureUrl(""); }}>Clear</button>
-              <button onClick={() => setSelected(false)}>Close</button>
+
+            {/* Footer */}
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'flex-end',
+                padding: '12px 16px',
+                background: '#f9f9f9',
+                borderTop: '1px solid #eee',
+              }}
+            >
+              <button
+                onClick={() => { setTextureUrl(''); }}
+                style={{
+                  padding: '6px 12px',
+                  border: '1px solid #ccc',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  backgroundColor: '#e0e0e0',
+                  color: '#333',
+                }}
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setSelected(false)}
+                style={{
+                  padding: '6px 12px',
+                  border: '1px solid #1e90ff',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  backgroundColor: '#1e90ff',
+                  color: 'white',
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
         )}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { FiImage, FiPlus, FiBox, FiMove, FiRotateCw } from 'react-icons/fi';
 import { type Vec2 } from '../types';
 
 type Props = {
@@ -15,7 +16,10 @@ const POINT_R_PX = 8;
 
 export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerSize, setContainerSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const mergeCandidateRef = useRef<number | null>(null);
   const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [pxPerM, setPxPerM] = useState<number>(100);
   const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
@@ -135,7 +139,21 @@ export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props)
       ctx.setLineDash([]);
       ctx.restore();
     }
-  }, [vertices, offset, selectedEdge, selectedVertex, hoverEdge, hoverVertex, isAddMode, addPreview, isObjectMode, objectSelected, pxPerM]);
+  }, [vertices, offset, selectedEdge, selectedVertex, hoverEdge, hoverVertex, isAddMode, addPreview, isObjectMode, objectSelected, pxPerM, containerSize.w, containerSize.h]);
+
+  // Track container size changes (e.g., when splitter moves) and trigger redraw
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        setContainerSize({ w: Math.floor(cr.width), h: Math.floor(cr.height) });
+      }
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
 
   function worldToCanvas(v: Vec2, cx: number, cy: number): [number, number] {
     return [cx + v.x * pxPerM, cy - v.y * pxPerM];
@@ -377,9 +395,52 @@ export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props)
       return;
     }
     if (dragIndex === null) return;
-    onMove(dragIndex, canvasToWorld(px, py, cx, cy));
+    let target = canvasToWorld(px, py, cx, cy);
+    // Shift+drag: keep adjacent edges axis-aligned (horizontal/vertical)
+    if (e.shiftKey && vertices.length >= 2) {
+      const n = vertices.length;
+      const prev = vertices[(dragIndex - 1 + n) % n];
+      const next = vertices[(dragIndex + 1) % n];
+      const candidates: Vec2[] = [
+        { x: target.x, y: prev.y }, // align horizontally with prev
+        { x: prev.x, y: target.y }, // align vertically with prev
+        { x: target.x, y: next.y }, // align horizontally with next
+        { x: next.x, y: target.y }, // align vertically with next
+      ];
+      let best = candidates[0];
+      let bestD2 = (best.x - target.x) ** 2 + (best.y - target.y) ** 2;
+      for (let i = 1; i < candidates.length; i++) {
+        const c = candidates[i];
+        const d2 = (c.x - target.x) ** 2 + (c.y - target.y) ** 2;
+        if (d2 < bestD2) { best = c; bestD2 = d2; }
+      }
+      target = best;
+    }
+    onMove(dragIndex, target);
+
+    // When dragged near another vertex, snap and prepare to merge
+    const MERGE_SNAP_PX = 10;
+    const [tx, ty] = worldToCanvas(target, cx, cy);
+    let candidate: number | null = null;
+    let bestD = MERGE_SNAP_PX;
+    for (let i = 0; i < vertices.length; i++) {
+      if (i === dragIndex) continue;
+      const [vx, vy] = worldToCanvas(vertices[i], cx, cy);
+      const d = Math.hypot(vx - tx, vy - ty);
+      if (d <= bestD) { bestD = d; candidate = i; }
+    }
+    mergeCandidateRef.current = candidate;
+    if (candidate !== null) {
+      // visual snap while dragging
+      onMove(dragIndex, { x: vertices[candidate].x, y: vertices[candidate].y });
+    }
   }
   function onPointerUp() {
+    // If we have a merge candidate, merge by deleting the dragged vertex
+    if (dragIndex !== null && mergeCandidateRef.current !== null) {
+      onDelete(dragIndex);
+    }
+    mergeCandidateRef.current = null;
     setDragIndex(null);
     setDragEdge(null);
     setIsPanning(false);
@@ -433,49 +494,66 @@ export default function Floor2D({ vertices, onMove, onInsert, onDelete }: Props)
   }, [selectedVertex, vertices.length, onDelete]);
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span>2D Blueprint — kéo để di chuyển, Ctrl khi kéo cạnh để thẳng trục</span>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => {
+    <div ref={containerRef} style={{ height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+      <HeaderBar
+        onExportPNG={() => {
           const canvas = canvasRef.current; if (!canvas) return;
           const url = canvas.toDataURL('image/png');
-          const a = document.createElement('a');
-          a.href = url; a.download = 'blueprint-2d.png'; a.click();
-        }}>Export PNG</button>
-        <button onClick={() => {
-          const data = { vertices };
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = 'blueprint-2d.json'; a.click();
-          URL.revokeObjectURL(url);
-        }}>Export JSON</button>
-        <button onClick={() => setIsAddMode(m => !m)} style={{ background: isAddMode ? '#ffefef' : undefined }}>
-          {isAddMode ? 'Click edge to insert… (ESC to cancel)' : 'Add Vertex'}
-        </button>
-        <button onClick={() => { setIsObjectMode(m => !m); setObjectSelected(false); }} style={{ background: isObjectMode ? '#eef9ff' : undefined }}>
-          {isObjectMode ? (objectSelected ? 'Object Selected' : 'Object Mode') : 'Object Mode'}
-        </button>
-        {isObjectMode && (
-          <>
-            <button onClick={() => setObjectTool('translate')} style={{ background: objectTool === 'translate' ? '#dff7df' : undefined }}>Move</button>
-            <button onClick={() => setObjectTool('rotate')} style={{ background: objectTool === 'rotate' ? '#f7efd9' : undefined }}>Rotate</button>
-            {objectSelected && (
-              <button onClick={() => setObjectSelected(false)}>Deselect</button>
-            )}
-          </>
-        )}
-      </div>
+          const a = document.createElement('a'); a.href = url; a.download = 'blueprint-2d.png'; a.click();
+        }}
+        isAddMode={isAddMode}
+        toggleAddMode={() => setIsAddMode(m => !m)}
+        isObjectMode={isObjectMode}
+        toggleObjectMode={() => { setIsObjectMode(m => !m); setObjectSelected(false); }}
+        objectTool={objectTool}
+        setObjectTool={setObjectTool}
+      />
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: isPanning ? 'grabbing' : isObjectMode ? (objectTool === 'rotate' ? 'crosshair' : 'move') : (hoverVertex !== null || hoverEdge !== null) ? 'pointer' : 'grab' }}
+        style={{ width: '100%', height: '100%', display: 'block', cursor: isPanning ? 'grabbing' : isObjectMode ? (objectTool === 'rotate' ? 'crosshair' : 'move') : (hoverVertex !== null || hoverEdge !== null) ? 'pointer' : 'grab' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onWheel={onWheel}
         onContextMenu={(e) => e.preventDefault()}
       />
+    </div>
+  );
+}
+
+type HeaderBarProps = {
+  onExportPNG: () => void;
+  isAddMode: boolean;
+  toggleAddMode: () => void;
+  isObjectMode: boolean;
+  toggleObjectMode: () => void;
+  objectTool: 'translate' | 'rotate';
+  setObjectTool: (t: 'translate' | 'rotate') => void;
+};
+
+function HeaderBar(props: HeaderBarProps) {
+  const { onExportPNG, isAddMode, toggleAddMode, isObjectMode, toggleObjectMode,  objectTool, setObjectTool } = props;
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const IconBtn = ({ id, active, title, onClick, children }: { id: string; active?: boolean; title: string; onClick: () => void; children: React.ReactNode }) => (
+    <button
+      title={title}
+      onMouseEnter={() => setHoverId(id)}
+      onMouseLeave={() => setHoverId(h => h === id ? null : h)}
+      onClick={onClick}
+      style={{ width: 40, height: 40, border: '1px solid #dcdfe3', borderRadius: 6, background: active ? '#e9ecef' : (hoverId === id ? '#f4f5f7' : '#ffffff'), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+    >{children}</button>
+  );
+  return (
+    <div style={{ padding: '6px 10px', borderBottom: '1px solid #e6e8eb', display: 'flex', alignItems: 'center', gap: 8, background: '#333333' }}>
+      <IconBtn id="add" title={isAddMode ? 'Exit Add Vertex' : 'Add Vertex'} onClick={toggleAddMode} active={isAddMode}><FiPlus style={{ fontSize: 16 }} /></IconBtn>
+      <IconBtn id="obj" title={isObjectMode ? 'Exit Object Mode' : 'Object Mode'} onClick={toggleObjectMode} active={isObjectMode}><FiBox style={{ fontSize: 16 }} /></IconBtn>
+      {isObjectMode && (
+        <>
+          <IconBtn id="move" title="Move" onClick={() => setObjectTool('translate')} active={objectTool === 'translate'}><FiMove style={{ fontSize: 16 }} /></IconBtn>
+          <IconBtn id="rotate" title="Rotate" onClick={() => setObjectTool('rotate')} active={objectTool === 'rotate'}><FiRotateCw style={{ fontSize: 16 }} /></IconBtn>
+        </>
+      )}
+      <IconBtn id="png" title="Export PNG" onClick={onExportPNG}><FiImage style={{ fontSize: 16 }} /></IconBtn>
     </div>
   );
 }

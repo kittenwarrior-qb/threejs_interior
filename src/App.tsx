@@ -19,6 +19,21 @@ export default function App() {
     setVertices(prev => [...prev, v]);
   }, []);
 
+  const deleteVertex = useCallback((index: number) => {
+    setVertices(prev => {
+      if (prev.length <= 3) return prev; 
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const insertVertex = useCallback((index: number, v: Vec2) => {
+    setVertices(prev => {
+      const next = prev.slice();
+      next.splice(index, 0, v);
+      return next;
+    });
+  }, []);
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', height: '100vh' }}>
       <div style={{ borderRight: '1px solid #ddd' }}>
@@ -26,6 +41,8 @@ export default function App() {
           vertices={vertices}
           onMove={updateVertex}
           onAdd={addVertex}
+          onInsert={insertVertex}
+          onDelete={deleteVertex}
         />
       </div>
       <div>

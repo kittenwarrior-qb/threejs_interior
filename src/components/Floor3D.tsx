@@ -255,8 +255,16 @@ export default function Floor3D({ vertices }: Props) {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}>
-        3D Floor — ShapeGeometry từ polygon 2D
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>3D Floor — ShapeGeometry từ polygon 2D</span>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => {
+          const r = rendererRef.current; if (!r) return;
+          r.render(sceneRef.current!, cameraRef.current!);
+          const url = r.domElement.toDataURL('image/png');
+          const a = document.createElement('a');
+          a.href = url; a.download = 'screenshot-3d.png'; a.click();
+        }}>Screenshot</button>
       </div>
       <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
         {selected && (
